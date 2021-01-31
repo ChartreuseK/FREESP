@@ -48,6 +48,9 @@ start:
 	int 20h
 
 @@ahead:
+	mov al, BYTE PTR [ds:81h] ; Check if we were run with no params
+	cmp al, 0Dh
+	je @@usage
 	mov al, BYTE PTR [ds:82h] ; First character of parameter
 	and al, 0DFh		; Convert to uppercase
 	cmp al, 'A'
