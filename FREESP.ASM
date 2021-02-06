@@ -85,8 +85,16 @@ start:
 	lea si, bootseg
 	cmp WORD PTR [si+0Bh], 512	; Make sure this is 512 bytes/sector
 	jne @@unknowndisk
-	cmp WORD PTR [si+039h], 3631h	; Check that Filesystem type is FAT16
-	jne @@unknowndisk
+	; Check that we're FAT16 by looking at the cluster count
+	push si
+	call getTotalClusters
+	add sp, 2
+	and dx, dx
+	jne @@unknowndisk		; Total clusters >= 65536 = FAT32
+	cmp ax, 65524
+	ja @@unknowndisk		; >= 65525 = FAT32
+	cmp ax, 4085
+	jb @@unknowndisk		; < 4085 = FAT12
 	; Assume we're looking at a FAT16 filesystem now
 
 	mov ax, WORD PTR [si+16h]	; # of sectors per FAT
@@ -97,7 +105,6 @@ start:
 	;  of the far pointer passed). If # clusters is > 128 (128*512=64kB)
 	;  then we need to do multiple reads. And for any decently sized
 	;  disk it will be 256. (2x 64kB reads)
-
 	mov bx, WORD PTR [si+0Eh] ; start of FAT
 
 	cmp ax, 128
@@ -127,6 +134,46 @@ start:
 	; Get total clusters
 	; Can't use int21h:1Ch since that runs the slow drive space
 	; calculator for some reason
+	push si
+	call getTotalClusters
+	add sp, 2
+	; Since we're FAT16, ax contains the total clusters
+	sub ax, WORD PTR [usedclust]	; AX = available clusters
+
+	push ds
+	push ax
+	; Now we change the dos data structure
+	mov ah, 32h		; Get Drive Parameter Block
+	mov dl, BYTE PTR [drv]	; Get drive ID
+	inc dl			; Drive # is offset by 1 compared with 25h
+	int 21h
+	; DS:BX now points straight to the appropriate data structure
+	; For DOS 4-6 offset 1F contains a word with the # of free clusters
+	; on drive, with FFFFh if unknown
+	pop ax
+	mov WORD PTR [bx+1Fh], ax	; Update free clusters
+	pop ds
+
+	int 20h                         ; Exit
+	;-------------------------------------
+
+readfail:
+	mov ah, 09h
+	lea dx, readfailstr
+	int 21h
+	int 20h
+
+;-------------------------
+; long getTotalClusters(void *bootsect)
+;  Calculates total clusters on FAT volume
+;  DS:AX total clusters
+getTotalClusters PROC
+	ARG bootsect:WORD
+	push bp
+	mov bp, sp
+	push si
+	mov si, [bootsect]
+
 	; Total clusters =
 	;   total sectors - hidden sectors - num fats * sectors per fat
 	;  -------------------------------------------------------------
@@ -164,31 +211,12 @@ start:
 @@found:
 	; DX:AX now contains available clusters. Since FAT16 must be less
 	; than 65525 clusters our result is in AX
+	pop si
+	pop bp
+	ret
+getTotalClusters ENDP
 
-	sub ax, WORD PTR [usedclust]	; AX = available clusters
 
-	push ds
-	push ax
-	; Now we change the dos data structure
-	mov ah, 32h		; Get Drive Parameter Block
-	mov dl, BYTE PTR [drv]	; Get drive ID
-	inc dl			; Drive # is offset by 1 compared with 25h
-	int 21h
-	; DS:BX now points straight to the appropriate data structure
-	; For DOS 4-6 offset 1F contains a word with the # of free clusters
-	; on drive, with FFFFh if unknown
-	pop ax
-	mov WORD PTR [bx+1Fh], ax	; Update free clusters
-	pop ds
-
-	int 20h                         ; Exit
-	;-------------------------------------
-
-readfail:
-	mov ah, 09h
-	lea dx, readfailstr
-	int 21h
-	int 20h
 
 ;------------------------------------------------
 ; word getUsedClust(word startsect, byte sectcount)
