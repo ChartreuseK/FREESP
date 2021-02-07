@@ -58,6 +58,12 @@ inthandler:
 	pushf       ; Preserve flags
 	cmp ah, 36h ; Calculate disk free space
 	je @@handle
+	cmp ah, 1Ch ; Get allocation data for specified drive
+	je @@handle
+	; 1Bh requires us to get the 'current' drive, as do 36 and 1C w/DL=0
+	cmp ah, 1Bh
+	je @@handle
+
 	; Some other int 21h function, we don't care
 	popf
 	jmp DWORD PTR cs:[oldint21h]
@@ -72,7 +78,18 @@ inthandler:
 	push ds
 	mov ds, ax          ; ds = ss = cs
 	; We now have a stack and ds setup
+	push dx             ; Save dx first
 
+	cmp BYTE PTR cs:[callerax+1], 1Bh
+	je @@getdefault
+	and dl, dl          ; Check if drive # is default
+	jne @@scan
+@@getdefault:
+	mov ah, 19h
+	int 21h             ; 21h/19h = Get default disk drive
+	inc al
+	mov dl, al          ; Move into dl to be consistent with others
+@@scan:
 	; Scan through our drive table to see if we care for this drive
 	; and if it's unknown
 	push si
@@ -114,7 +131,6 @@ recalc:
 	; cx, si still on stack from scan loop
 
 	push bx     ; Preserve other registers
-	push dx
 	push di
 	push bp
 	push es
@@ -127,11 +143,11 @@ exit2:
 	pop es
 	pop bp
 	pop di
-	pop dx
 	pop bx
 	pop cx
 	pop si
 exit1:
+	pop dx
 	pop ds
 	mov ax, WORD PTR cs:[callerss]
 	mov ss, ax
@@ -368,9 +384,7 @@ init:
 	mov WORD PTR [oldint21h], bx
 	mov WORD PTR [oldint21h+2], es
 
-	; Now install our new vector
-	mov ax, cs
-	mov es, ax
+	; Now install our new vector (DS:DX)
 	mov dx, OFFSET inthandler
 	mov ax, 2521h       ; Install over int 21h
 	int 21h
